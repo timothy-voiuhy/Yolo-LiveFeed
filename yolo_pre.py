@@ -6,11 +6,19 @@ import torch
 import random
 from helperfunctions import getURL, createLogger, checkConnection
 import argparse
+import queue
 import sys
+import requests
+import time
+import multiprocessing
+import threading
 from PIL import Image
 
 console_logger = createLogger(is_consoleLogger=True)
-buffer_size = 20
+buffer_size = 50
+
+processManager= multiprocessing.Manager()
+frameQueue = processManager.Queue(maxsize= buffer_size)
 
 def calculateDistance():
     """Here a model that has been trained on perspective data can be used
@@ -173,12 +181,24 @@ def trackVideo(modelPath:str, filepath:str):
     """
     model = YOLO(modelPath)
     model.track(source=filepath, show=True)
+    sys.exit(1)
 
 def getModel(modelPath: str):   
     model = YOLO(modelPath)
     return model
 
-def startLiveFeedDetection(__model:YOLO, url = None):
+def displayImsInThread(sharedQueue:queue.Queue):
+    while True:
+        # if sharedQueue.qsize() > buffer_size -10:
+        frame = frameQueue.get()
+        cv2.imshow("Live queue Cap", frame)
+        if cv2.waitKey(10) & 0xFF == ord('q'):
+            break
+
+def startLiveFeedDetection(__model:YOLO, url = None, queueMaxSize = 20):
+    # displayThread = threading.Thread(target=displayImsInThread)
+    # displayProcess = multiprocessing.Process(target=displayImsInThread, args=(frameQueue, ))
+    # displayProcess.start()
     if url is not None:
         if checkConnection(url):
             cap = cv2.VideoCapture(url)
@@ -198,6 +218,8 @@ def startLiveFeedDetection(__model:YOLO, url = None):
         while True:
             # capture frame by frame from the camera
             ret, frame = cap.read() 
+            # if frameQueue.qsize() > buffer_size-10:
+            #     displayProcess.start()
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frame_tensor = torch.from_numpy(frame_rgb).permute(2,0,1)
             if not ret:
@@ -219,14 +241,16 @@ def startLiveFeedDetection(__model:YOLO, url = None):
                     # direction 
                     # box_tensor = torch.from_numpy(box)
                     direction = calculateDirection(frame=frame_tensor, boundingbox=(x1, y1, x2, y2))
-                    # label 
-                    label = f"Direction: {direction}"
+                    # label = f"Direction: {direction}"
+                    
+                    label = f"Conf: {confidence:.2f} Class: {class_names[class_id.item()]}"
                     #place the label onto the image at a spcific point 
                     cv2.putText(frame, label, (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                     cv2.imshow(window_name, frame)
                     # break the loop if q is pressed
                     if cv2.waitKey(10) & 0xFF == ord('q'):
                         break
+                    # frameQueue.put(frame)
     except Exception as e:
         logging.warning(f"Experienced exception {e}")
         cap.release() 
@@ -253,7 +277,7 @@ def parseArgs():
     parser.add_argument("--trackVid", action="store_true", help="do live image segmentation on a video file")
     parser.add_argument("--vidPath", default=None, help="the path to the video file to track incase --trackVid is choosen")
     parser.add_argument("--modelPath", default=None, type=str, help="The path to the model")
-    parser.add_argument("--startCap", action="store_true", default=True, help="Start the live capture detection using the yolo model")
+    parser.add_argument("--startCap", action="store_true", default=False, help="Start the live capture detection using the yolo model")
     return parser
 
 def startCapture(modelPath, url = None, ip = None, port = None, https = None):
